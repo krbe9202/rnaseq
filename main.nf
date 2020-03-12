@@ -55,6 +55,7 @@ def helpMessage() {
       --trim_nextseq [int]          Instructs Trim Galore to apply the --nextseq=X option, to trim based on quality after removing poly-G tails
       --pico                        Sets trimming and standedness settings for the SMARTer Stranded Total RNA-Seq Kit - Pico Input kit. Equivalent to: --forwardStranded --clip_r1 3 --three_prime_clip_r2 3
       --saveTrimmed                 Save trimmed FastQ file intermediates
+      --trimmomatic                 Uses Trimmomatic instead of Trim Galore for trimming (hardcoded) 
 
     Ribosomal RNA removal:
       --removeRiboRNA               Removes ribosomal RNA using SortMeRNA
@@ -130,7 +131,7 @@ ch_mdsplot_header = Channel.fromPath("$baseDir/assets/mdsplot_header.txt", check
 ch_heatmap_header = Channel.fromPath("$baseDir/assets/heatmap_header.txt", checkIfExists: true)
 ch_biotypes_header = Channel.fromPath("$baseDir/assets/biotypes_header.txt", checkIfExists: true)
 Channel.fromPath("$baseDir/assets/where_are_my_files.txt", checkIfExists: true)
-       .into{ch_where_trim_galore; ch_where_star; ch_where_hisat2; ch_where_hisat2_sort}
+       .into{ch_where_trim_galore; ch_where_trimmomatic; ch_where_star; ch_where_hisat2; ch_where_hisat2_sort}
 
 // Define regular variables so that they can be overwritten
 clip_r1 = params.clip_r1
@@ -262,8 +263,7 @@ if (params.gtf) {
       log.info "Both GTF and GFF have been provided: Using GTF as priority."
   }
   if (hasExtension(params.gtf, 'gz')) {
-  gtf_gz = Channel
-        .fromPath(params.gtf, checkIfExists: true)
+  gtf_gz = Channel        .fromPath(params.gtf, checkIfExists: true)
         .ifEmpty { exit 1, "GTF annotation file not found: ${params.gtf}" }
   } else {
     Channel
@@ -346,6 +346,22 @@ if (params.readPaths) {
             .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
             .into { raw_reads_fastqc; raw_reads_trimgalore }
     }
+    // Trimmomatic option
+    if (params.singleEnd && params.trimmomatic) {
+        Channel
+            .from(params.readPaths)
+            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true) ] ] }
+            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+            .into { raw_reads_fastqc; raw_reads_trimmomatic }
+
+    } else if (params.trimmomatic) {
+          Channel
+            .from(params.readPaths)
+            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true), file(row[1][1], checkIfExists: true) ] ] }
+            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+            .into { raw_reads_fastqc; raw_reads_trimmomatic }
+    }
+    
 } else {
     Channel
         .fromFilePairs( params.reads, size: params.singleEnd ? 1 : 2 )
@@ -364,6 +380,9 @@ if (params.genome) summary['Genome'] = params.genome
 if (params.pico) summary['Library Prep'] = "SMARTer Stranded Total RNA-Seq Kit - Pico Input"
 summary['Strandedness'] = (unStranded ? 'None' : forwardStranded ? 'Forward' : reverseStranded ? 'Reverse' : 'None')
 summary['Trimming'] = "5'R1: $clip_r1 / 5'R2: $clip_r2 / 3'R1: $three_prime_clip_r1 / 3'R2: $three_prime_clip_r2 / NextSeq Trim: $params.trim_nextseq"
+if (params.trimmomatic) {
+  summary['Trimming'] = "ur trying something different ok ur doing great sweetie~"
+}
 if (params.aligner == 'star') {
     summary['Aligner'] = "STAR"
     if (params.star_index)summary['STAR Index'] = params.star_index
@@ -897,14 +916,68 @@ if (!params.skipTrimming) {
    trimgalore_results = Channel.empty()
 }
 
+/*
+ * STEP 2 - Trimming option using Trimmomatic 
+ */
+
+if (!params.skipTrimming && params.trimmomatic) {
+
+
+  process trimmomatic {
+      label 'low_memory'
+      input: 
+        set val(name), file(reads) from raw_reads_trimmomatic
+        file wherearemyfiles from ch_where_trimmomatic.collect()
+
+      output: 
+        set val(name), file("*fq.gz") into trimmomatic_reads
+        file "*trimming_report.txt" into trimmomatic_results
+        file "*_fastqc.{zip,html}" into trimmomatic_fastqc_reports
+        file "where_are_my_files.txt"
+
+      script: 
+      trim="SLIDINGWINDOW:5:20 MINLEN:50"
+      phred="-phred33"
+      thread=20
+      trimlog=0
+      verbose=0
+
+      if(params.singleEnd) {
+        clip=ILLUMINACLIP:$TRIMMOMATIC_HOME/adapters/TruSeq3-PE-2.fa:2:30:10
+      } else {
+        clip=ILLUMINACLIP:$TRIMMOMATIC_HOME/adapters/TruSeq3-SE.fa:2:30:10
+      }
+      
+      if(!params.singleEnd) {
+
+        """
+        java -jar $TRIMMOMATIC_HOME/trimmomatic.jar PE -threads $thread $phred $clip
+        """
+      } else {
+
+        """
+        java -jar $TRIMMOMATIC_HOME/trimmomatic.jar SE -threads $thread $phred $clip
+        """
+
+      }
+
+  }
+}
+
 
 /*
  * STEP 2+ - SortMeRNA - remove rRNA sequences on request
  */
 if (!params.removeRiboRNA) {
+  if(! params.trimmomatic) {
     trimgalore_reads
-        .into { trimmed_reads_alignment; trimmed_reads_salmon }
+    .into { trimmed_reads_alignment; trimmed_reads_salmon }
     sortmerna_logs = Channel.empty()
+  } else {
+    trimmomatic_reads
+    .into { trimmed_reads_alignment; trimmed_reads_salmon }
+    sortmerna_logs = Channel.empty()
+  }
 } else {
     process sortmerna_index {
         label 'low_memory'
@@ -935,10 +1008,18 @@ if (!params.removeRiboRNA) {
             }
 
         input:
+        if(!params.trimmomatic) {
         set val(name), file(reads) from trimgalore_reads
         val(db_name) from sortmerna_db_name.collect()
         file(db_fasta) from sortmerna_db_fasta.collect()
         file(db) from sortmerna_db.collect()
+
+        } else {
+        set val(name), file(reads) from trimmomatic_reads
+        val(db_name) from sortmerna_db_name.collect()
+        file(db_fasta) from sortmerna_db_fasta.collect()
+        file(db) from sortmerna_db.collect()
+        }
 
         output:
         set val(name), file("*.fq.gz") into trimmed_reads_alignment, trimmed_reads_salmon
