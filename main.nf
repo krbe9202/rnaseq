@@ -871,7 +871,8 @@ process fastqc {
  * STEP 2 - Trim Galore!
  */
 if (!params.skipTrimming) {
-    process trim_galore {
+  if(!params.trimmomatic) {
+        process trim_galore {
         label 'low_memory'
         tag "$name"
         publishDir "${params.outdir}/trim_galore", mode: 'copy',
@@ -910,20 +911,9 @@ if (!params.skipTrimming) {
             """
         }
     }
-}else{
-   raw_reads_trimgalore
-       .set {trimgalore_reads}
-   trimgalore_results = Channel.empty()
-}
 
-/*
- * STEP 2 - Trimming option using Trimmomatic 
- */
-
-if (!params.skipTrimming && params.trimmomatic) {
-
-
-  process trimmomatic {
+  } else {
+    process trimmomatic {
       label 'low_memory'
       input: 
         set val(name), file(reads) from raw_reads_trimmomatic
@@ -961,7 +951,12 @@ if (!params.skipTrimming && params.trimmomatic) {
 
       }
 
+    }
   }
+} else{
+   raw_reads_trimgalore
+       .set {trimgalore_reads}
+   trimgalore_results = Channel.empty()
 }
 
 
