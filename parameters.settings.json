@@ -613,6 +613,14 @@
             "pattern": ".*",
             "type": "string",
             "default_value": ""
+        }, 
+        {
+            "name": "trimmomatic",
+            "label": "Trimmomatic option",
+            "usage": "Use trimmomatic instead of Trim Galore for trimming reads",
+            "type": "boolean",
+            "render": "check-box",
+            "default_value": false,
         }
     ]
 }
