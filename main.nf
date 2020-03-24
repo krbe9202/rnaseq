@@ -55,6 +55,7 @@ def helpMessage() {
       --trim_nextseq [int]          Instructs Trim Galore to apply the --nextseq=X option, to trim based on quality after removing poly-G tails
       --pico                        Sets trimming and standedness settings for the SMARTer Stranded Total RNA-Seq Kit - Pico Input kit. Equivalent to: --forwardStranded --clip_r1 3 --three_prime_clip_r2 3
       --saveTrimmed                 Save trimmed FastQ file intermediates
+      --trimmomatic                 Uses Trimmomatic instead of Trim Galore for trimming
 
     Ribosomal RNA removal:
       --removeRiboRNA               Removes ribosomal RNA using SortMeRNA
@@ -130,7 +131,7 @@ ch_mdsplot_header = Channel.fromPath("$baseDir/assets/mdsplot_header.txt", check
 ch_heatmap_header = Channel.fromPath("$baseDir/assets/heatmap_header.txt", checkIfExists: true)
 ch_biotypes_header = Channel.fromPath("$baseDir/assets/biotypes_header.txt", checkIfExists: true)
 Channel.fromPath("$baseDir/assets/where_are_my_files.txt", checkIfExists: true)
-       .into{ch_where_trim_galore; ch_where_star; ch_where_hisat2; ch_where_hisat2_sort}
+       .into{ch_where_trim_galore; ch_where_trimmomatic; ch_where_star; ch_where_hisat2; ch_where_hisat2_sort}
 
 // Define regular variables so that they can be overwritten
 clip_r1 = params.clip_r1
@@ -262,8 +263,7 @@ if (params.gtf) {
       log.info "Both GTF and GFF have been provided: Using GTF as priority."
   }
   if (hasExtension(params.gtf, 'gz')) {
-  gtf_gz = Channel
-        .fromPath(params.gtf, checkIfExists: true)
+  gtf_gz = Channel        .fromPath(params.gtf, checkIfExists: true)
         .ifEmpty { exit 1, "GTF annotation file not found: ${params.gtf}" }
   } else {
     Channel
@@ -333,25 +333,52 @@ ch_output_docs = file("$baseDir/docs/output.md", checkIfExists: true)
  * Create a channel for input read files
  */
 if (params.readPaths) {
+  if(!params.trimmomatic) {
     if (params.singleEnd) {
-        Channel
-            .from(params.readPaths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { raw_reads_fastqc; raw_reads_trimgalore }
-    } else {
-        Channel
-            .from(params.readPaths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true), file(row[1][1], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { raw_reads_fastqc; raw_reads_trimgalore }
-    }
+            Channel
+                .from(params.readPaths)
+                .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true) ] ] }
+                .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+                .into { raw_reads_fastqc; raw_reads_trimgalore }
+        } else {
+            Channel
+                .from(params.readPaths)
+                .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true), file(row[1][1], checkIfExists: true) ] ] }
+                .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+                .into { raw_reads_fastqc; raw_reads_trimgalore }
+        }
+  } else {
+    if(params.singleEnd) {
+            Channel
+                .from(params.readPaths)
+                .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true) ] ] }
+                .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+                .into { raw_reads_fastqc; raw_reads_trimmomatic }
+        } else {
+            Channel
+                .from(params.readPaths)
+                .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true), file(row[1][1], checkIfExists: true) ] ] }
+                .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+                .into { raw_reads_fastqc; raw_reads_trimmomatic }
+
+        }
+  } 
 } else {
+  if(!params.trimmomatic) {
     Channel
         .fromFilePairs( params.reads, size: params.singleEnd ? 1 : 2 )
         .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nNB: Path requires at least one * wildcard!\nIf this is single-end data, please specify --singleEnd on the command line." }
         .into { raw_reads_fastqc; raw_reads_trimgalore }
+  } else {
+    Channel
+    .fromFilePairs( params.reads, size: params.singleEnd ? 1 : 2 )
+    .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nNB: Path requires at least one * wildcard!\nIf this is single-end data, please specify --singleEnd on the command line." }
+    .into { raw_reads_fastqc; raw_reads_trimmomatic }
+
+  }
 }
+
+
 
 // Header log info
 log.info nfcoreHeader()
@@ -364,6 +391,7 @@ if (params.genome) summary['Genome'] = params.genome
 if (params.pico) summary['Library Prep'] = "SMARTer Stranded Total RNA-Seq Kit - Pico Input"
 summary['Strandedness'] = (unStranded ? 'None' : forwardStranded ? 'Forward' : reverseStranded ? 'Reverse' : 'None')
 summary['Trimming'] = "5'R1: $clip_r1 / 5'R2: $clip_r2 / 3'R1: $three_prime_clip_r1 / 3'R2: $three_prime_clip_r2 / NextSeq Trim: $params.trim_nextseq"
+if (params.trimmomatic) summary['Trimming'] = "Trimmomatic"
 if (params.aligner == 'star') {
     summary['Aligner'] = "STAR"
     if (params.star_index)summary['STAR Index'] = params.star_index
@@ -450,6 +478,7 @@ process get_software_versions {
     fastqc --version &> v_fastqc.txt
     cutadapt --version &> v_cutadapt.txt
     trim_galore --version &> v_trim_galore.txt
+    trimmomatic -version &> v_trimmomatic.txt  
     sortmerna --version &> v_sortmerna.txt
     STAR --version &> v_star.txt
     hisat2 --version &> v_hisat2.txt
@@ -852,7 +881,8 @@ process fastqc {
  * STEP 2 - Trim Galore!
  */
 if (!params.skipTrimming) {
-    process trim_galore {
+  if(!params.trimmomatic) {
+        process trim_galore {
         label 'low_memory'
         tag "$name"
         publishDir "${params.outdir}/trim_galore", mode: 'copy',
@@ -891,10 +921,63 @@ if (!params.skipTrimming) {
             """
         }
     }
-}else{
-   raw_reads_trimgalore
-       .set {trimgalore_reads}
-   trimgalore_results = Channel.empty()
+
+  } else {
+    process trimmomatic {
+        label 'low_memory'
+        tag "$name"
+        publishDir "${params.outdir}/trimmomatic", mode: 'copy',
+            saveAs: {filename ->
+                if (filename.indexOf("_fastqc") > 0) "FastQC/$filename"
+                else if (filename.indexOf("trimming_report.txt") > 0) "logs/$filename"
+                else if (!params.saveTrimmed && filename == "where_are_my_files.txt") filename
+                else if (params.saveTrimmed && filename != "where_are_my_files.txt") filename
+                else null
+            }
+      
+      input: 
+        set val(name), file(reads) from raw_reads_trimmomatic
+        file wherearemyfiles from ch_where_trimmomatic.collect()
+
+
+      output: 
+        set val(name), file("*fq.gz") into trimmomatic_reads
+        file "*trimming_report.txt" into trimmomatic_results
+        file "*_fastqc.{zip,html}" into trimmomatic_fastqc_reports
+        file "where_are_my_files.txt"
+
+
+      script: 
+      trim="SLIDINGWINDOW:5:20 MINLEN:50"
+      phred="-phred33"
+      thread=20
+      trimlog=0
+      verbose=0
+
+      if(!params.singleEnd) {
+        clip="ILLUMINACLIP:${TRIMMOMATIC}/adapters/TruSeq3-PE-2.fa:2:30:10"
+      } else {
+        clip="ILLUMINACLIP:${TRIMMOMATIC}/adapters/TruSeq3-SE.fa:2:30:10"
+      }
+      
+      if(!params.singleEnd) {
+        """
+        java -jar ${TRIMMOMATIC}/trimmomatic.jar PE $phred $reads -baseout "*fq.gz" $clip $trim
+        """
+      } else {
+
+        """
+        java -jar ${TRIMMOMATIC}/trimmomatic.jar SE $phred $reads $clip $trim
+        """
+
+      }
+
+    }
+  }
+} else{
+    raw_reads_trimgalore
+    .set {trimgalore_reads}
+    trimgalore_results = Channel.empty()
 }
 
 
@@ -902,9 +985,15 @@ if (!params.skipTrimming) {
  * STEP 2+ - SortMeRNA - remove rRNA sequences on request
  */
 if (!params.removeRiboRNA) {
+  if(!params.trimmomatic) {
     trimgalore_reads
-        .into { trimmed_reads_alignment; trimmed_reads_salmon }
+    .into { trimmed_reads_alignment; trimmed_reads_salmon }
     sortmerna_logs = Channel.empty()
+  } else {
+    trimmomatic_reads
+    .into { trimmed_reads_alignment; trimmed_reads_salmon }
+    sortmerna_logs = Channel.empty()
+  }
 } else {
     process sortmerna_index {
         label 'low_memory'
@@ -935,10 +1024,18 @@ if (!params.removeRiboRNA) {
             }
 
         input:
+        if(!params.trimmomatic) {
         set val(name), file(reads) from trimgalore_reads
         val(db_name) from sortmerna_db_name.collect()
         file(db_fasta) from sortmerna_db_fasta.collect()
         file(db) from sortmerna_db.collect()
+
+        } else {
+        set val(name), file(reads) from trimmomatic_reads
+        val(db_name) from sortmerna_db_name.collect()
+        file(db_fasta) from sortmerna_db_fasta.collect()
+        file(db) from sortmerna_db.collect()
+        }
 
         output:
         set val(name), file("*.fq.gz") into trimmed_reads_alignment, trimmed_reads_salmon
@@ -1650,13 +1747,14 @@ if (params.pseudo_aligner == 'salmon') {
 process multiqc {
     publishDir "${params.outdir}/MultiQC", mode: 'copy'
 
-    when:
+    when: 
     !params.skipMultiQC
 
     input:
     file multiqc_config from ch_multiqc_config
     file (fastqc:'fastqc/*') from fastqc_results.collect().ifEmpty([])
     file ('trimgalore/*') from trimgalore_results.collect().ifEmpty([])
+    //file ('trimmomatic/*') from trimmomatic_results.collect().ifEmpty([]) 
     file ('alignment/*') from alignment_logs.collect().ifEmpty([])
     file ('rseqc/*') from rseqc_results.collect().ifEmpty([])
     file ('qualimap/*') from qualimap_results.collect().ifEmpty([])
