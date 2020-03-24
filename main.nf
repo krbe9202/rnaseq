@@ -962,12 +962,12 @@ if (!params.skipTrimming) {
       
       if(!params.singleEnd) {
         """
-        java -jar ${TRIMMOMATIC}/trimmomatic-0.39.jar PE $phred $reads -baseout "*fq.gz" $clip $trim
+        java -jar ${TRIMMOMATIC}/trimmomatic.jar PE $phred $reads -baseout "*fq.gz" $clip $trim
         """
       } else {
 
         """
-        java -jar ${TRIMMOMATIC}/trimmomatic-0.39.jar SE $phred $reads $clip $trim
+        java -jar ${TRIMMOMATIC}/trimmomatic.jar SE $phred $reads $clip $trim
         """
 
       }
@@ -1753,8 +1753,8 @@ process multiqc {
     input:
     file multiqc_config from ch_multiqc_config
     file (fastqc:'fastqc/*') from fastqc_results.collect().ifEmpty([])
-    if (!params.trimmomatic) file ('trimgalore/*') from trimgalore_results.collect().ifEmpty([])
-    file ('trimmomatic/*') from trimmomatic_results.collect().ifEmpty([]) 
+    file ('trimgalore/*') from trimgalore_results.collect().ifEmpty([])
+    //file ('trimmomatic/*') from trimmomatic_results.collect().ifEmpty([]) 
     file ('alignment/*') from alignment_logs.collect().ifEmpty([])
     file ('rseqc/*') from rseqc_results.collect().ifEmpty([])
     file ('qualimap/*') from qualimap_results.collect().ifEmpty([])
