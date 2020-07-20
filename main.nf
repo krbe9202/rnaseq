@@ -876,7 +876,6 @@ process fastqc {
     """
 }
 
-
 /*
  * STEP 2 - Trim Galore!
  */
@@ -959,10 +958,10 @@ if (!params.skipTrimming) {
       } else {
         clip="ILLUMINACLIP:${TRIMMOMATIC}/adapters/TruSeq3-SE.fa:2:30:10"
       }
-      
+      //java -jar ${TRIMMOMATIC}/trimmomatic.jar PE $phred $reads -baseout "*fq.gz" $clip $trim
       if(!params.singleEnd) {
         """
-        java -jar ${TRIMMOMATIC}/trimmomatic.jar PE $phred $reads -baseout "*fq.gz" $clip $trim
+        java -jar ${TRIMMOMATIC}/trimmomatic.jar PE $phred $reads -baseout "*fq.gz" $clip $trim        
         """
       } else {
 
